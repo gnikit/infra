@@ -62,6 +62,7 @@ compilers:
           - 4.0.0
           - 4.2.0
           - 4.3.0
+          - 4.4.0
       newer:
         untar_dir: sdcc
         targets:
@@ -155,3 +156,4 @@ compilers:
             - 13.2.0
             - 13.3.0
             - 14.1.0
+            - 14.2.0

@@ -108,10 +108,36 @@ libraries:
       - 1.82.0
       - 1.83.0
       - 1.84.0
-      - 1.85.0
       type: tarballs
       untar_dir: boost_{{underscore_name}}
       url: https://archives.boost.io/release/{{name}}/source/boost_{{underscore_name}}.tar.bz2
+    boost_bin:
+      type: tarballs
+      check_file: CMakeLists.txt
+      subdir: boost-{{name}}
+      dir: libs/boost-{{name}}
+      untar_dir: boost-{{name}}
+      build_type: cmake
+      package_install: true
+      lib_type: shared
+      after_stage_script:
+        - shopt -s globstar
+        - for i in **/CMakeLists.txt; do
+        -   sed -i 's/-Werror/-Wno-error/g' "$i"
+        - done
+        - for i in **/*.cmake; do
+        -   sed -i 's/-Werror/-Wno-error/g' "$i"
+        - done
+      make_targets:
+        - all
+      sharedliblink:
+        - boost_iostreams
+      extra_cmake_arg:
+        - -DBUILD_SHARED_LIBS=ON
+      url: https://github.com/boostorg/boost/releases/download/boost-{{name}}/boost-{{name}}-cmake.tar.xz
+      compression: xz
+      targets:
+        - 1.85.0
     brigand:
       check_file: README.md
       method: clone_branch
@@ -447,6 +473,7 @@ libraries:
       - 10.0.0
       - 10.1.1
       - 10.2.1
+      - 11.0.0
       type: github
     gcem:
       build_type: cmake
@@ -653,7 +680,7 @@ libraries:
       - sed -i 's/if(NOT "..CMAKE_BUILD_TYPE." STREQUAL "")/set(CMAKE_BUILD_TYPE "")\nif(FALSE)/'
         Meta/Lagom/CMakeLists.txt
       - sed 's/cmakedefine01 \(\w\+\)/define \1 0/' AK/Debug.h.in > AK/Debug.h
-      build_type: cmake
+      build_type: manual
       check_file: CMakeLists.txt
       extra_cmake_arg:
       - -DBUILD_LAGOM=ON
@@ -857,6 +884,7 @@ libraries:
       - v0.8.0
       - v2.0.0
       - v2.1.0
+      - v2.2.0
       type: github
     nightly:
       abseil:
@@ -1970,6 +1998,7 @@ libraries:
       targets:
       - 3.0.1
       - 3.1.5
+      - 3.10.0
       type: github
     sol2:
       build_type: none
@@ -2027,6 +2056,7 @@ libraries:
       repo: rollbear/strong_type
       target_prefix: v
       targets:
+      - '15'
       - '14'
       - '13'
       - '12'
@@ -2115,6 +2145,7 @@ libraries:
       - '45'
       - '46'
       - '47'
+      - '48'
       type: github
     tts:
       check_file: README.md
@@ -2242,6 +2273,13 @@ libraries:
         targets:
         - trunk
         type: github
+      matx:
+        check_file: README.md
+        method: nightlyclone
+        repo: NVIDIA/MatX
+        targets:
+        - trunk
+        type: github
       nvtx:
         check_file: cpp/include/nvtx3/nvtx3.hpp
         method: clone_branch
@@ -2256,6 +2294,15 @@ libraries:
         targets:
         - trunk
         type: github
+    matx:
+      check_file: README.md
+      method: clone_branch
+      repo: NVIDIA/MatX
+      target_prefix: v
+      targets:
+      - 0.8.0
+      - 0.7.0
+      type: github
     nvtx:
       check_file: c/include/nvtx3/nvToolsExt.h
       method: clone_branch

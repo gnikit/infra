@@ -128,3 +128,47 @@ resource "aws_dynamodb_table" "compiler-builds" {
     enabled = false
   }
 }
+
+resource "aws_dynamodb_table" "events-connections" {
+  name = "events-connections"
+  lifecycle {
+    ignore_changes = [
+      read_capacity,
+      write_capacity
+    ]
+    prevent_destroy = true
+  }
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "connectionId"
+
+  attribute {
+    name = "connectionId"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = false
+  }
+}
+
+resource "aws_dynamodb_table" "remote-exec-archs" {
+  name = "remote-exec-archs"
+  lifecycle {
+    ignore_changes = [
+      read_capacity,
+      write_capacity
+    ]
+    prevent_destroy = true
+  }
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "triple"
+
+  attribute {
+    name = "triple"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = false
+  }
+}

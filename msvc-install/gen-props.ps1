@@ -48,8 +48,14 @@ $minimumInstallReq = (
     (New-Object PSObject -Property @{ MSVersionSemver="14.36.32544"; MSVSVer="2022"; MSVSShortVer="17.6.11"; ZIPFile="14.36.32532-14.36.32544.0"; }),
     (New-Object PSObject -Property @{ MSVersionSemver="14.37.32826.1"; MSVSVer="2022"; MSVSShortVer="17.7.7"; ZIPFile="14.37.32822-14.37.32826.1"; }),
     (New-Object PSObject -Property @{ MSVersionSemver="14.38.33133"; MSVSVer="2022"; MSVSShortVer="17.8.3"; ZIPFile="14.38.33130-14.38.33133.0"; }),
-    (New-Object PSObject -Property @{ MSVersionSemver="14.39.33321-Pre"; MSVSVer=""; MSVSShortVer=""; ZIPFile=""; })
-    # 14.40.33807-14.40.33808.0
+    # (New-Object PSObject -Property @{ MSVersionSemver="14.39.33321-Pre"; MSVSVer=""; MSVSShortVer=""; ZIPFile=""; })
+    (New-Object PSObject -Property @{ MSVersionSemver="14.39.33519"; MSVSVer="2022"; MSVSShortVer="17.9.7"; ZIPFile="14.39.33519-14.39.33523.0"; }),
+    (New-Object PSObject -Property @{ MSVersionSemver="14.40.33807"; MSVSVer="2022"; MSVSShortVer="17.10.3"; ZIPFile="14.40.33807-14.40.33811.0"; })
+    # Matt added this without really understanding, it's as of 2024/07/01 the "latest"
+    # I found the "MSVSShortVer" numbers by looking in the installer manually. I hope there's an easier way to work this out.
+    # I commented it out as this script will give it the wrong name, but it's useful to generate the basics.
+    #(New-Object PSObject -Property @{ MSVersionSemver="14.41.33923"; MSVSVer="2022"; MSVSShortVer="17.11.0"; ZIPFile="14.41.33923-14.41.33923.0"; })
+
 )
 
 $RootDir = "Z:/compilers/msvc"
