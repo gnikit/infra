@@ -1,6 +1,6 @@
 locals {
   runner_image_id        = "ami-05d4fb32368117b54"
-  gpu_runner_image_id    = "ami-0e9b7b6038861de04"
+  gpu_runner_image_id    = "ami-0d71185d6b73466d0"
   conan_image_id         = "ami-0b41dc7a318b530bd"
   smbserver_image_id     = "ami-01e7c7963a9c4755d"
   smbtestserver_image_id = "ami-0284c821376912369"
