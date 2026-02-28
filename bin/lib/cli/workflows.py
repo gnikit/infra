@@ -120,7 +120,6 @@ def run_discovery(
 @workflows.command("run-gpu-discovery")
 @click.argument("buildnumber")
 @click.option("--branch", default="main", help="Branch to use for discovery (default: main)")
-@click.option("--skip-remote-checks", default="", help="Comma separated list of remote checks to skip")
 @click.option("--dry-run", is_flag=True, help="Print the command without executing")
 @click.option("--wait", is_flag=True, help="Wait for workflow to complete")
 @click.pass_obj
@@ -128,7 +127,6 @@ def run_gpu_discovery(
     cfg: Config,
     buildnumber: str,
     branch: str,
-    skip_remote_checks: str,
     dry_run: bool,
     wait: bool,
 ):
@@ -145,12 +143,9 @@ def run_gpu_discovery(
         f"branch={branch}",
         "--field",
         f"buildnumber={buildnumber}",
+        "-R",
+        "github.com/compiler-explorer/infra",
     ]
-
-    if skip_remote_checks:
-        cmd.extend(["--field", f"skip_remote_checks={skip_remote_checks}"])
-
-    cmd.extend(["-R", "github.com/compiler-explorer/infra"])
 
     if dry_run:
         print(" ".join(cmd))

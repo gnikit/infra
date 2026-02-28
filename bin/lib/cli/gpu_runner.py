@@ -7,7 +7,6 @@ from tempfile import NamedTemporaryFile
 import boto3
 import click
 
-from lib.cli.runner import runner_check_discovery_json_contents
 from lib.discovery import s3_key_for_discovery
 from lib.instance import GpuRunnerInstance
 from lib.ssh import exec_remote, exec_remote_to_stdout, get_remote_file, run_remote_shell
@@ -50,19 +49,10 @@ def gpu_runner_discovery():
 @gpu_runner.command(name="uploaddiscovery")
 @click.argument("environment", required=True, type=click.Choice(["gpu"]))
 @click.argument("version", required=True)
-@click.option(
-    "--skip-remote-checks",
-    default="",
-    help="Skip checks for remote compilers type REMOTE (comma separated)",
-    metavar="REMOTE",
-)
-def gpu_runner_uploaddiscovery(environment: str, version: str, skip_remote_checks: str):
-    """Download discovery JSON from GPU runner, validate, and upload to S3."""
+def gpu_runner_uploaddiscovery(environment: str, version: str):
+    """Download discovery JSON from GPU runner and upload to S3."""
     with NamedTemporaryFile(suffix=".json") as temp_json_file:
         get_remote_file(GpuRunnerInstance.instance(), "/home/ce/discovered-compilers.json", temp_json_file.name)
-        temp_json_file.seek(0)
-
-        runner_check_discovery_json_contents(temp_json_file.read().decode("utf-8"), skip_remote_checks)
         temp_json_file.seek(0)
 
         boto3.client("s3").put_object(

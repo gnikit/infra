@@ -221,7 +221,7 @@ The `ce workflows` command group provides functionality to trigger GitHub Action
 
 - **`ce workflows run-gpu-discovery BUILDNUMBER`** - Trigger GPU compiler discovery workflow in infra repo
   - Always targets the GPU environment
-  - Override with `--branch`, `--skip-remote-checks`
+  - Override with `--branch`
   - Use `--wait` to wait for workflow completion
   - Example: `ce workflows run-gpu-discovery gh-12345 --wait`
 
