@@ -97,6 +97,20 @@ def gpu_runner_start():
     else:
         raise RuntimeError("Unable to get SSH access")
 
+    for _ in range(60):
+        try:
+            r = exec_remote(instance, ["journalctl", "-u", "compiler-explorer", "-r", "-n", "5", "-q"])
+            if (
+                "compiler-explorer.service: Deactivated successfully." in r  # 22.04
+                or "compiler-explorer.service: Succeeded." in r  # 20.04
+            ):
+                break
+        except:  # noqa: E722
+            print("Waiting for startup to complete")
+        time.sleep(5)
+    else:
+        raise RuntimeError("compiler-explorer service did not exit cleanly")
+
     print("GPU runner started OK")
 
 
