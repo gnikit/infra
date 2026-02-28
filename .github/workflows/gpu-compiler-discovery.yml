@@ -25,7 +25,7 @@ jobs:
     - name: Update infra
       run: cd /home/ubuntu/infra && git pull && make ce
     - name: Set build number ${{ github.event.inputs.buildnumber }}
-      run: ce --env gpu builds set_current ${{ github.event.inputs.buildnumber }} --branch ${{ github.event.inputs.branch }} --confirm
+      run: ce --env gpu-runner builds set_current ${{ github.event.inputs.buildnumber }} --branch ${{ github.event.inputs.branch }} --confirm
     - name: Start GPU runner
       run: ce gpu-runner start
     - name: Update infra on GPU runner

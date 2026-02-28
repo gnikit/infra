@@ -495,7 +495,7 @@ my_client.some_method()  # Client is initialized on first use
 
 The codebase supports multiple environments defined in `lib/env.py`:
 - `PROD`, `BETA`, `STAGING` - Main environments
-- `GPU`, `RUNNER` - Specialized environments
+- `GPU`, `GPU_RUNNER`, `RUNNER` - Specialized environments
 - `WINPROD`, `WINSTAGING`, `WINTEST` - Windows environments
 - `AARCH64PROD`, `AARCH64STAGING` - ARM environments
 
