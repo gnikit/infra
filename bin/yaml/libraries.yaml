@@ -1511,6 +1511,14 @@ libraries:
         targets:
         - main
         type: github
+      beman_monadics:
+        build_type: none
+        check_file: README.md
+        method: nightlyclone
+        repo: bemanproject/monadics
+        targets:
+        - main
+        type: github
       beman_net:
         build_type: none
         check_file: README.md
