@@ -11,11 +11,13 @@ import shutil
 import subprocess
 import tempfile
 import time
+import urllib.parse
 from collections import defaultdict
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from enum import Enum, unique
+from logging import Logger
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, TextIO, TypedDict
 
 import botocore
 import requests
@@ -81,11 +83,126 @@ _supports_x86: dict[str, Any] = defaultdict(lambda: [])
 _compiler_support_output: dict[str, Any] = defaultdict(lambda: [])
 
 GITCOMMITHASH_RE = re.compile(r"^(\w*)\s.*")
-CONANINFOHASH_RE = re.compile(r"\s+ID:\s(\w*)")
 
 
 def _quote(string: str) -> str:
     return f'"{string}"'
+
+
+class ConanSearchEntry(TypedDict, total=False):
+    """A single entry in a Conan /v1/.../search response, keyed by package_id at the top level."""
+
+    settings: dict[str, str]
+    options: dict[str, str]
+    full_requires: list[str]
+    recipe_hash: str
+
+
+type PossibleBuilds = dict[str, ConanSearchEntry]
+
+
+def match_conan_settings(target: dict[str, str], candidate: dict[str, str]) -> bool:
+    """Match a target settings dict against a candidate's settings.
+
+    Ported from compiler-explorer/lib/buildenvsetup/ceconan.ts findMatchingHash. Each rule
+    checks the *candidate's* value for the key under inspection, so a partially-flagged
+    headeronly entry (only some sub-settings set to 'headeronly') is matched key-by-key
+    rather than via a single up-front predicate. Behavioural rules:
+    - 'headeronly' / 'cshared' value on compiler/compiler.version matches any target value.
+    - 'headeronly' / 'cshared' value on compiler.libcxx (only when the candidate's
+      `settings.compiler` is itself 'headeronly' or 'cshared') matches any target libcxx;
+      'headeronly' also matches any arch.
+    - stdver is treated as a wildcard: pre-c++11 ABI breakage aside, compiler.version
+      already discriminates incompatible cases.
+    - All other keys must compare equal.
+    """
+    candidate_compiler = candidate.get("compiler", "")
+    parent_is_placeholder = candidate_compiler in ("headeronly", "cshared")
+
+    for key, val in target.items():
+        if key in ("compiler", "compiler.version") and candidate.get(key) in ("headeronly", "cshared"):
+            continue
+        if key == "compiler.libcxx" and parent_is_placeholder:
+            continue
+        if key == "arch" and candidate_compiler == "headeronly":
+            continue
+        if key == "stdver":
+            continue
+        if val != candidate.get(key, ""):
+            return False
+    return True
+
+
+def conan_search_url(libname: str, target_name: str) -> str:
+    encoded_lib = urllib.parse.quote(libname, safe="")
+    encoded_ver = urllib.parse.quote(target_name, safe="")
+    return f"{conanserver_url}/v1/conans/{encoded_lib}/{encoded_ver}/{encoded_lib}/{encoded_ver}/search"
+
+
+def fetch_possible_builds(
+    libname: str,
+    target_name: str,
+    fetcher: Callable[[str], requests.Response | None],
+    logger: Logger,
+) -> PossibleBuilds:
+    """Fetch and parse the conan-server /search response for a (libname, target_name).
+
+    `fetcher` is a one-argument callable taking the URL and returning a Response (or None to
+    signal a request that failed all retries). Each builder class supplies its own fetcher
+    so it can pick its retry strategy (resil_get vs raw http_session.get).
+
+    404 means no packages have been uploaded yet for this lib/version, and is the natural
+    starting state for new libraries -- return an empty dict.
+    """
+    url = conan_search_url(libname, target_name)
+    try:
+        response = fetcher(url)
+    except requests.RequestException as e:
+        raise FetchFailure(f"Conan search request failed for {libname}/{target_name}: {e}") from e
+
+    if response is None:
+        raise FetchFailure(f"Conan search request failed for {libname}/{target_name}")
+    if response.status_code == 404:
+        logger.debug("No uploaded builds yet for %s/%s", libname, target_name)
+        return {}
+    if not response.ok:
+        raise FetchFailure(f"Conan search returned {response.status_code} for {libname}/{target_name}")
+
+    try:
+        payload = response.json()
+    except ValueError as e:
+        raise FetchFailure(f"Conan search returned non-JSON for {libname}/{target_name}") from e
+    if not isinstance(payload, dict):
+        raise FetchFailure(f"Conan search returned non-object JSON for {libname}/{target_name}")
+    return payload
+
+
+def find_matching_package_id(possible_builds: PossibleBuilds, target: dict[str, str]) -> str | None:
+    """Return the first package_id in `possible_builds` whose settings match `target`."""
+    for package_id, entry in possible_builds.items():
+        settings = entry.get("settings", {}) if isinstance(entry, dict) else {}
+        if match_conan_settings(target, settings):
+            return package_id
+    return None
+
+
+def build_target_settings(buildparams: dict[str, Any]) -> dict[str, str]:
+    """Translate current_buildparameters_obj keys into conan settings dotted form.
+
+    Uses .get(key, "") rather than indexing because the source object may be a defaultdict
+    with a list factory; a missing key would otherwise mutate the dict and produce a
+    non-string value that breaks equality matching.
+    """
+    return {
+        "os": buildparams.get("os", ""),
+        "build_type": buildparams.get("buildtype", ""),
+        "compiler": buildparams.get("compiler", ""),
+        "compiler.version": buildparams.get("compiler_version", ""),
+        "compiler.libcxx": buildparams.get("libcxx", ""),
+        "arch": buildparams.get("arch", ""),
+        "stdver": buildparams.get("stdver", ""),
+        "flagcollection": buildparams.get("flagcollection", ""),
+    }
 
 
 @unique
@@ -136,7 +253,7 @@ class LibraryBuilder:
         self.conanserverproxy_token = None
         self.current_commit_hash = ""
         self.platform = platform
-        self._conan_hash_cache: dict[str, str | None] = {}
+        self._possible_builds: PossibleBuilds | None = None
         self._annotations_cache: dict[str, dict] = {}
         self.http_session = requests.Session()
 
@@ -1068,25 +1185,22 @@ class LibraryBuilder:
 
         return compiler + "_" + str(iteration)
 
+    def _get_possible_builds(self) -> PossibleBuilds:
+        """Return the conan-server /search response for this (libname, target_name), cached."""
+        if self._possible_builds is None:
+            self._possible_builds = fetch_possible_builds(
+                self.libname,
+                self.target_name,
+                lambda url: self.resil_get(url, stream=False, timeout=_TIMEOUT),
+                self.logger,
+            )
+        return self._possible_builds
+
     def get_conan_hash(self, buildfolder: str) -> str | None:
-        if buildfolder in self._conan_hash_cache:
-            self.logger.debug(f"Using cached conan hash for {buildfolder}")
-            return self._conan_hash_cache[buildfolder]
-
-        if not self.install_context.dry_run:
-            self.logger.debug(["conan", "info", "."] + self.current_buildparameters)
-            conaninfo = subprocess.check_output(
-                ["conan", "info", "-r", "ceserver", "."] + self.current_buildparameters, cwd=buildfolder
-            ).decode("utf-8", "ignore")
-            self.logger.debug(conaninfo)
-            match = CONANINFOHASH_RE.search(conaninfo, re.MULTILINE)
-            if match:
-                result = match[1]
-                self._conan_hash_cache[buildfolder] = result
-                return result
-
-        self._conan_hash_cache[buildfolder] = None
-        return None
+        if self.install_context.dry_run:
+            return None
+        target = build_target_settings(self.current_buildparameters_obj)
+        return find_matching_package_id(self._get_possible_builds(), target)
 
     def conanproxy_login(self):
         url = f"{conanserver_url}/login"
@@ -1223,15 +1337,19 @@ class LibraryBuilder:
             return False
 
     def set_as_uploaded(self, buildfolder):
+        # We need the conan package_id (a deterministic SHA from compiler+version+libcxx+arch+...)
+        # to PUT annotations against /annotations/{lib}/{ver}/{package_id}. get_conan_hash
+        # derives the id by querying the server's /search index, which only lists packages
+        # already on the server -- so for a freshly built package, we must upload first.
+        annotations = self.get_build_annotations(buildfolder)
+        if "commithash" not in annotations:
+            self.upload_builds()
+
         conanhash = self.get_conan_hash(buildfolder)
         if conanhash is None:
             raise RuntimeError(f"Error determining conan hash in {buildfolder}")
 
-        self.logger.info(f"commithash: {conanhash}")
-
-        annotations = self.get_build_annotations(buildfolder)
-        if "commithash" not in annotations:
-            self.upload_builds()
+        self.logger.info(f"conanhash: {conanhash}")
         annotations["commithash"] = self.get_commit_hash()
 
         for lib in itertools.chain(self.buildconfig.staticliblink, self.buildconfig.sharedliblink):
@@ -1392,6 +1510,8 @@ class LibraryBuilder:
                 self.logger.debug("Clearing cache to speed up next upload")
                 subprocess.check_call(["conan", "remove", "-f", f"{self.libname}/{self.target_name}"])
             self.needs_uploading = 0
+            # Force re-fetch on next get_conan_hash so post-upload set_as_uploaded sees the new package.
+            self._possible_builds = None
 
     def get_compiler_type(self, compiler):
         compilerType = ""

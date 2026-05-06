@@ -11,7 +11,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 import shutil
 import subprocess
 from collections import defaultdict
@@ -29,6 +28,7 @@ from lib.cache_delta import CacheDeltaCapture
 from lib.golang_stdlib import go_supports_trimpath
 from lib.installation_context import InstallationContext, PostFailure
 from lib.library_build_config import LibraryBuildConfig
+from lib.library_builder import PossibleBuilds, build_target_settings, fetch_possible_builds, find_matching_package_id
 from lib.library_platform import LibraryPlatform
 from lib.staging import StagingDir
 
@@ -76,8 +76,6 @@ CONANSERVER_URL = "https://conan.compiler-explorer.com"
 
 # Cache for compiler properties
 _propsandlibs: dict[str, Any] = defaultdict(lambda: [])
-
-CONANINFOHASH_RE = re.compile(r"\s+ID:\s(\w*)")
 
 
 def clear_properties_cache() -> None:
@@ -133,7 +131,7 @@ class GoLibraryBuilder:
         # Prefix with 'go_' to avoid Conan namespace collisions with other languages
         self.libid = f"go_{self.libname}"
         self.conanserverproxy_token: str | None = None
-        self._conan_hash_cache: dict[str, str | None] = {}
+        self._possible_builds: PossibleBuilds | None = None
         self._annotations_cache: dict[str, dict] = {}
         self.http_session = requests.Session()
 
@@ -412,28 +410,22 @@ require {self.module_path} {self.target_name}
             f.write('        self.copy("module_sources/*", dst=".", keep_path=True)\n')
             f.write('        self.copy("metadata.json", dst=".", keep_path=False)\n')
 
+    def _get_possible_builds(self) -> PossibleBuilds:
+        if self._possible_builds is None:
+            self._possible_builds = fetch_possible_builds(
+                self.libid,
+                self.target_name,
+                lambda url: self.http_session.get(url, timeout=_TIMEOUT),
+                self.logger,
+            )
+        return self._possible_builds
+
     def get_conan_hash(self, buildfolder: Path) -> str | None:
-        """Query Conan for package hash."""
-        if str(buildfolder) in self._conan_hash_cache:
-            return self._conan_hash_cache[str(buildfolder)]
-
-        if not self.install_context.dry_run:
-            try:
-                conaninfo = subprocess.check_output(
-                    ["conan", "info", "-r", "ceserver", "."] + self.current_buildparameters,
-                    cwd=buildfolder,
-                    timeout=_TIMEOUT,
-                ).decode("utf-8", "ignore")
-                match = CONANINFOHASH_RE.search(conaninfo)
-                if match:
-                    result = match[1]
-                    self._conan_hash_cache[str(buildfolder)] = result
-                    return result
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-                self.logger.debug("Conan info failed: %s", e)
-
-        self._conan_hash_cache[str(buildfolder)] = None
-        return None
+        """Find the conan package_id matching the current build parameters, via the proxy search API."""
+        if self.install_context.dry_run:
+            return None
+        target = build_target_settings(self.current_buildparameters_obj)
+        return find_matching_package_id(self._get_possible_builds(), target)
 
     def resil_post(self, url: str, json_data: str, headers: dict | None = None) -> requests.Response | dict:
         """Resilient POST request with retries."""
@@ -557,15 +549,19 @@ require {self.module_path} {self.target_name}
 
     def set_as_uploaded(self, buildfolder: Path, build_method: str) -> None:
         """Mark build as uploaded in Conan server."""
+        # We need the conan package_id (a deterministic SHA from compiler+version+libcxx+arch+...)
+        # to PUT annotations against /annotations/{lib}/{ver}/{package_id}. get_conan_hash now
+        # derives the id by querying the server's /search index, which only lists packages
+        # already on the server -- so for a freshly built package, we must upload first.
+        annotations = self.get_build_annotations(buildfolder)
+        if "commithash" not in annotations:
+            self.upload_builds()
+
         conanhash = self.get_conan_hash(buildfolder)
         if conanhash is None:
             raise RuntimeError(f"Error determining conan hash in {buildfolder}")
 
         self.logger.info("conanhash: %s", conanhash)
-
-        annotations = self.get_build_annotations(buildfolder)
-        if "commithash" not in annotations:
-            self.upload_builds()
         annotations["commithash"] = self.target_name
         annotations["build_method"] = build_method
 
@@ -606,6 +602,7 @@ require {self.module_path} {self.target_name}
                 self.logger.debug("Clearing cache to speed up next upload")
                 subprocess.check_call(["conan", "remove", "-f", f"{self.libid}/{self.target_name}"])
             self.needs_uploading = 0
+            self._possible_builds = None
 
     def build_cleanup(self, buildfolder: Path) -> None:
         """Clean up build folder."""

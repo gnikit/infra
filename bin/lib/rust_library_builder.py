@@ -23,6 +23,7 @@ from lib.amazon import get_ssm_param
 from lib.amazon_properties import get_properties_compilers_and_libraries
 from lib.installation_context import FetchFailure, InstallationContext, PostFailure
 from lib.library_build_config import LibraryBuildConfig
+from lib.library_builder import PossibleBuilds, build_target_settings, fetch_possible_builds, find_matching_package_id
 from lib.library_platform import LibraryPlatform
 from lib.rust_crates import RustCrate, get_builder_user_agent_id
 from lib.staging import StagingDir
@@ -41,7 +42,6 @@ build_supported_flagscollection = [[""]]
 _propsandlibs: dict[str, Any] = defaultdict(lambda: [])
 
 GITCOMMITHASH_RE = re.compile(r"^(\w*)\s.*")
-CONANINFOHASH_RE = re.compile(r"\s+ID:\s(\w*)")
 
 
 @unique
@@ -86,7 +86,7 @@ class RustLibraryBuilder:
         self.needs_uploading = 0
         self.libid = self.libname  # TODO: CE libid might be different from yaml libname
         self.conanserverproxy_token = None
-        self._conan_hash_cache: dict[str, str | None] = {}
+        self._possible_builds: PossibleBuilds | None = None
         self._annotations_cache: dict[str, dict] = {}
         self.http_session = requests.Session()
 
@@ -259,25 +259,21 @@ class RustLibraryBuilder:
 
         return compiler + "_" + hasher.hexdigest()
 
+    def _get_possible_builds(self) -> PossibleBuilds:
+        if self._possible_builds is None:
+            self._possible_builds = fetch_possible_builds(
+                self.libname,
+                self.target_name,
+                lambda url: self.http_session.get(url, timeout=_TIMEOUT),
+                self.logger,
+            )
+        return self._possible_builds
+
     def get_conan_hash(self, buildfolder: str) -> str | None:
-        if buildfolder in self._conan_hash_cache:
-            self.logger.debug(f"Using cached conan hash for {buildfolder}")
-            return self._conan_hash_cache[buildfolder]
-
-        if not self.install_context.dry_run:
-            self.logger.debug(["conan", "info", "."] + self.current_buildparameters)
-            conaninfo = subprocess.check_output(
-                ["conan", "info", "-r", "ceserver", "."] + self.current_buildparameters, cwd=buildfolder
-            ).decode("utf-8", "ignore")
-            self.logger.debug(conaninfo)
-            match = CONANINFOHASH_RE.search(conaninfo, re.MULTILINE)
-            if match:
-                result = match[1]
-                self._conan_hash_cache[buildfolder] = result
-                return result
-
-        self._conan_hash_cache[buildfolder] = None
-        return None
+        if self.install_context.dry_run:
+            return None
+        target = build_target_settings(self.current_buildparameters_obj)
+        return find_matching_package_id(self._get_possible_builds(), target)
 
     def resil_post(self, url, json_data, headers=None):
         request = None
@@ -407,15 +403,19 @@ class RustLibraryBuilder:
             return False
 
     def set_as_uploaded(self, buildfolder, source_folder, build_method):
+        # We need the conan package_id (a deterministic SHA from compiler+version+libcxx+arch+...)
+        # to PUT annotations against /annotations/{lib}/{ver}/{package_id}. get_conan_hash now
+        # derives the id by querying the server's /search index, which only lists packages
+        # already on the server -- so for a freshly built package, we must upload first.
+        annotations = self.get_build_annotations(buildfolder)
+        if "commithash" not in annotations:
+            self.upload_builds()
+
         conanhash = self.get_conan_hash(buildfolder)
         if conanhash is None:
             raise RuntimeError(f"Error determining conan hash in {buildfolder}")
 
         self.logger.info(f"conanhash: {conanhash}")
-
-        annotations = self.get_build_annotations(buildfolder)
-        if "commithash" not in annotations:
-            self.upload_builds()
         annotations["commithash"] = self.get_commit_hash()
 
         for key in build_method:
@@ -640,6 +640,7 @@ class RustLibraryBuilder:
                 self.logger.debug("Clearing cache to speed up next upload")
                 subprocess.check_call(["conan", "remove", "-f", f"{self.libname}/{self.target_name}"])
             self.needs_uploading = 0
+            self._possible_builds = None
 
     def makebuild(self, buildfor):
         builds_failed = 0
