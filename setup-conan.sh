@@ -65,12 +65,15 @@ chown -R ${CE_USER}:${CE_USER} /home/${CE_USER}
 echo "/dev/data/datavol       /home/${CE_USER}/.conan_server   ext4   defaults,user=${CE_USER}       0 0
 " >>/etc/fstab
 
-# setup conan-server in a venv. Pinned to 1.59 to match what builders run
-# (init/start-builder.sh:35); the live legacy server has been on 1.30.2 since
-# 2020, so 1.59 is a deliberate but minimal bump. v2 is a hard break (different
-# wire protocol).
+# setup conan-server in a venv. Pinned to 1.66.0 (the last v1 release).
+# Builders run conan==1.59 (init/start-builder.sh:35), but 1.59 transitively
+# pins PyYAML<=6.0, which has no Python 3.12 wheel and fails to build from
+# source against modern Cython ('build_ext' has no attribute 'cython_sources').
+# 1.66 relaxes the PyYAML pin and installs cleanly. v1 wire protocol is stable
+# across the 1.x series, so 1.66 server <-> 1.59 client is fine. v2 would be a
+# hard break.
 sudo -u ${CE_USER} -H python3 -m venv /home/${CE_USER}/venv
-sudo -u ${CE_USER} -H /home/${CE_USER}/venv/bin/pip install 'conan==1.59' gunicorn
+sudo -u ${CE_USER} -H /home/${CE_USER}/venv/bin/pip install 'conan==1.66.0' gunicorn
 
 # setup conanproxy
 mkdir -p /home/ubuntu/ceconan
