@@ -3,6 +3,12 @@
 set -ex
 
 CE_USER=ce
+# Match the legacy bionic conan-node's ce uid/gid (`id ce` -> uid=111(ce) gid=115(ce))
+# so files on the reattached data volume keep their owner and no chown is needed
+# on cutover or rollback. If these ever diverge from /etc/passwd on the live host,
+# update them before baking; a mismatch turns rollback into a recursive chown.
+CE_UID=111
+CE_GID=115
 NODE_VERSION="v22.11.0"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${DIR}"
@@ -29,24 +35,42 @@ sleep 5
 wait_for_apt
 
 apt-get -y update
-apt-get -y upgrade --force-yes
-apt-get -y install unzip wget mosh fish jq ssmtp cronic upx autojump python3-pip python3.8 python3.8-venv sqlite3
+apt-get -y upgrade
+apt-get -y install \
+    unzip wget mosh fish jq ssmtp cronic upx \
+    python3-pip python3-venv \
+    sqlite3 \
+    lvm2 rsyslog
 apt-get -y autoremove
-pip3 install --upgrade pip
-hash -r pip3
-pip3 install --upgrade awscli
 
-# setup ce_user
-adduser --system --group ${CE_USER}
+# Install AWS CLI v2 (system pip is PEP 668-restricted on noble)
+pushd /tmp
+curl -sL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip -q awscliv2.zip
+./aws/install
+rm -rf aws awscliv2.zip
+popd
 
+# Create ce group/user with the legacy uid/gid; explicit --home because adduser
+# --system defaults to /nonexistent on noble, which would break the venv below.
+groupadd --system --gid "${CE_GID}" "${CE_USER}"
+useradd --system --uid "${CE_UID}" --gid "${CE_GID}" \
+    --home-dir "/home/${CE_USER}" --shell /usr/sbin/nologin "${CE_USER}"
 mkdir -p /home/${CE_USER}/.conan_server
+chown -R ${CE_USER}:${CE_USER} /home/${CE_USER}
+
+# Data volume is LVM (created on the legacy bionic instance). Mounted at first boot
+# from the existing /etc/fstab below; do not mount during AMI bake — the volume
+# will not be present.
 echo "/dev/data/datavol       /home/${CE_USER}/.conan_server   ext4   defaults,user=${CE_USER}       0 0
 " >>/etc/fstab
 
-# note: dont mount yet, volume will not be available
-
-# setup latest conan-server
-sudo -u ${CE_USER} -H pip3 install conan gunicorn
+# setup conan-server in a venv. Pinned to 1.59 to match what builders run
+# (init/start-builder.sh:35); the live legacy server has been on 1.30.2 since
+# 2020, so 1.59 is a deliberate but minimal bump. v2 is a hard break (different
+# wire protocol).
+sudo -u ${CE_USER} -H python3 -m venv /home/${CE_USER}/venv
+sudo -u ${CE_USER} -H /home/${CE_USER}/venv/bin/pip install 'conan==1.59' gunicorn
 
 # setup conanproxy
 mkdir -p /home/ubuntu/ceconan
@@ -86,7 +110,7 @@ PTRAIL='/etc/rsyslog.d/99-papertrail.conf'
 echo "*.*          @${LOG_DEST_HOST}:${LOG_DEST_PORT}" >"${PTRAIL}"
 service rsyslog restart
 pushd /tmp
-curl -sL 'https://github.com/papertrail/remote_syslog2/releases/download/v0.20/remote_syslog_linux_amd64.tar.gz' | tar zxf -
+curl -sL 'https://github.com/papertrail/remote_syslog2/releases/download/v0.21/remote_syslog_linux_amd64.tar.gz' | tar zxf -
 cp remote_syslog/remote_syslog /usr/local/bin/
 popd
 
