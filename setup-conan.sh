@@ -75,6 +75,12 @@ echo "/dev/data/datavol       /home/${CE_USER}/.conan_server   ext4   defaults,u
 sudo -u ${CE_USER} -H python3 -m venv /home/${CE_USER}/venv
 sudo -u ${CE_USER} -H /home/${CE_USER}/venv/bin/pip install 'conan==1.66.0' gunicorn
 
+# Make /home/ubuntu world-traversable so the ce user can reach conanproxy and
+# the node binary at runtime. Noble defaults adduser HOME_MODE to 0750; bionic
+# was 0755, which is what start-conan.sh's `sudo -u ce -H /home/ubuntu/...`
+# silently relied on.
+chmod 755 /home/ubuntu
+
 # setup conanproxy
 mkdir -p /home/ubuntu/ceconan
 cd /home/ubuntu/ceconan
